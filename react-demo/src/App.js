@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
-import { convertToRaw, Editor, EditorState, RichUtils } from 'draft-js';
+import { convertToRaw, Editor, EditorState, RichUtils, ContentState, convertFromHTML } from 'draft-js';
 import draftToHtml from 'draftjs-to-html';
 import 'draft-js/dist/Draft.css';
 import './App.css';
+import axios from 'axios';
+
 
 function App() {
 	const [editorState, setEditorState] = useState(EditorState.createEmpty());
@@ -98,30 +100,51 @@ function App() {
 			</span>
 		);
 	};
-	const handleFile = (e) => {
-		const file = e.target.files[0];
-		const reader = new FileReader();
-		reader.onload = (e) => {
-			const contentState = editorState.getCurrentContent();
-			const contentStateWithEntity = contentState.createEntity(
-				'IMAGE',
-				'IMMUTABLE',
-				{ src: e.target.result }
-			);
-			const entityKey = contentStateWithEntity.getLastCreatedEntityKey();
-			const newEditorState = EditorState.set(editorState, {
-				currentContent: contentStateWithEntity,
-			});
-			setEditorState(
-				RichUtils.toggleLink(
-					newEditorState,
-					newEditorState.getSelection(),
-					entityKey
-				)
-			);
+
+	const handleSave = async () => {
+		const rawContentState = convertToRaw(editorState.getCurrentContent());
+		const hashtagConfig = {
+			trigger: '#',
+			separator: ' ',
 		};
-		reader.readAsDataURL(file);
+		const directional = true;
+		const customEntityTransform = (entity) => {
+			if (entity.type === 'LINK') {
+				return <a href={entity.data.url}>{entity.data.url}</a>;
+			}
+			else if (entity.type === 'IMAGE') {
+				return <img src={entity.data.src} alt={entity.data.alt} />;
+			}
+		};
+		const html = draftToHtml(
+			rawContentState,
+			hashtagConfig,
+			directional,
+			customEntityTransform
+		);
+		console.log(html);
+		await fetch('https://localhost:5001/api/Export', {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json',
+				"access-control-allow-origin": "*",
+			},
+			body: JSON.stringify({ "htmlString": html }),
+		})
+			.then(res => res.blob())
+			.then(blob => {
+				const url = window.URL.createObjectURL(new Blob([blob]));
+				const link = document.createElement('a');
+				link.href = url;
+				link.setAttribute('download', 'file.docx');
+				document.body.appendChild(link);
+				link.click();
+				link.remove();
+			}).catch(err => console.log(err));
+
+
 	};
+
 	const convertToHtml = (editorState) => {
 		const rawContentState = convertToRaw(editorState.getCurrentContent());
 		const hashtagConfig = {
@@ -146,8 +169,30 @@ function App() {
 		console.log(html);
 		return html;
 	}
+
+	const onFileChange = (event) => {
+		const file = event.target.files[0];
+		const form = new FormData();
+		form.append('file', file);
+		axios.post('https://localhost:5001/api/export/convert', form, {
+			headers: {
+				'Content-Type': 'multipart/form-data',
+			}
+		}).then(res => {
+			const html = res.data;
+			const blocksFromHTML = convertFromHTML(html);
+			const state = ContentState.createFromBlockArray(
+				blocksFromHTML.contentBlocks,
+				blocksFromHTML.entityMap,
+			);
+			setEditorState(EditorState.createWithContent(state));
+		}
+		).catch(err => console.log(err));
+
+	};
+
 	return (
-		<div className="App">
+		<div className="App" >
 			<div className="RichEditor-root">
 				<BlockStyleControls
 					editorState={editorState}
@@ -173,14 +218,20 @@ function App() {
 						>
 							<button
 								className='RichEditor-button'
-								onClick={() => convertToHtml(editorState)}>Log</button>
+								onClick={() => setEditorState(EditorState.createEmpty())}>Clear</button>
 							<button
 								className='RichEditor-button'
-								onClick={() => setEditorState(EditorState.createEmpty())}>Clean</button>
+								onClick={() => handleSave()}>Save</button>
 						</div>
-						<input
-							style={{ width: '100%' }}
-							type="file" onChange={handleFile} />
+						<form
+							method="post"
+							action="https://localhost:5001/api/export/convert"
+							encType="multipart/form-data"
+						>
+							<label htmlFor="file">Upload file raw:</label>
+							<input type="file" name="file" onChange={onFileChange} />
+						</form>
+
 					</div>
 				</div>
 
